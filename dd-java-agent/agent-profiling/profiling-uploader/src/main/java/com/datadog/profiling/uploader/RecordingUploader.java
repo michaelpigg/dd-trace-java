@@ -36,6 +36,7 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -74,8 +75,9 @@ public final class RecordingUploader {
   static final String JAVA_LANG = "java";
   static final String DATADOG_META_LANG = "Datadog-Meta-Lang";
 
-  static final int MAX_RUNNING_REQUESTS = 10;
-  static final int MAX_ENQUEUED_REQUESTS = 20;
+  private final static int MAX_BACKOFF_TIME = 8; // seconds
+  private final int MAX_RETRIES;
+  final int MAX_RUNNING_REQUESTS;
 
   static final String RECORDING_FORMAT = "jfr";
   static final String RECORDING_TYPE_PREFIX = "jfr-";
@@ -86,27 +88,6 @@ public final class RecordingUploader {
   private static final Headers DATA_HEADERS =
       Headers.of(
           "Content-Disposition", "form-data; name=\"" + DATA_PARAM + "\"; filename=\"recording\"");
-
-  private static final Callback RESPONSE_CALLBACK =
-      new Callback() {
-        @Override
-        public void onFailure(final Call call, final IOException e) {
-          log.error("Failed to upload recording", e);
-        }
-
-        @Override
-        public void onResponse(final Call call, final Response response) {
-          if (response.isSuccessful()) {
-            log.debug("Upload done");
-          } else {
-            log.error(
-                "Failed to upload recording: unexpected response code {} {}",
-                response.message(),
-                response.code());
-          }
-          response.close();
-        }
-      };
 
   static final int SEED_EXPECTED_REQUEST_SIZE = 2 * 1024 * 1024; // 2MB;
   static final int REQUEST_SIZE_HISTORY_SIZE = 10;
@@ -119,6 +100,7 @@ public final class RecordingUploader {
   private final List<String> tags;
   private final Compression compression;
   private final Deque<Integer> requestSizeHistory;
+  private final ThreadPoolExecutor retryThreadPool;
 
   public RecordingUploader(final Config config) {
     url = config.getFinalProfilingUrl();
@@ -140,6 +122,10 @@ public final class RecordingUploader {
     }
     tags = tagsToList(tagsMap);
 
+    MAX_RETRIES = config.getProfilingMaxRetryUpload();
+    MAX_RUNNING_REQUESTS = MAX_RETRIES + 1;
+    MAX_ENQUEUED_REQUESTS = MAX_RUNNING_REQUESTS + 10;
+
     // This is the same thing OkHttp Dispatcher is doing except thread naming and deamonization
     okHttpExecutorService =
         new ThreadPoolExecutor(
@@ -154,8 +140,15 @@ public final class RecordingUploader {
     final ConnectionPool connectionPool =
         new ConnectionPool(MAX_RUNNING_REQUESTS, 1, TimeUnit.SECONDS);
 
+    Duration requestTimeout = Duration.ofSeconds(config.getProfilingUploadTimeout());
+    Duration uploadPeriod = Duration.ofSeconds(config.getProfilingUploadPeriod());
+    if (requestTimeout.compareTo(uploadPeriod) > 0) {
+      // We want to ensure that we never have more than MAX_RUNNING_REQUESTS.
+      // A request timeout > to the upload period combined with the retry policy breaks this assumption
+      requestTimeout = uploadPeriod;
+    }
+
     // Use same timeout everywhere for simplicity
-    final Duration requestTimeout = Duration.ofSeconds(config.getProfilingUploadTimeout());
     final OkHttpClient.Builder clientBuilder =
         new OkHttpClient.Builder()
             .connectTimeout(requestTimeout)
@@ -198,6 +191,14 @@ public final class RecordingUploader {
 
     requestSizeHistory = new ArrayDeque<>(REQUEST_SIZE_HISTORY_SIZE);
     requestSizeHistory.add(SEED_EXPECTED_REQUEST_SIZE);
+
+    retryThreadPool = new ThreadPoolExecutor(
+      0,
+      Integer.MAX_VALUE,
+      60,
+      TimeUnit.SECONDS,
+      new SynchronousQueue<>(),
+      new ProfilingThreadFactory("dd-profiler-http-retry-upload"));
   }
 
   public void upload(final RecordingType type, final RecordingData data) {
@@ -313,7 +314,7 @@ public final class RecordingUploader {
             .post(requestBody)
             .build();
 
-    client.newCall(request).enqueue(RESPONSE_CALLBACK);
+    client.newCall(request).enqueue(new RetryCallback());
   }
 
   private int getExpectedRequestSize() {
@@ -339,7 +340,11 @@ public final class RecordingUploader {
   }
 
   private boolean canEnqueueMoreRequests() {
-    return client.dispatcher().queuedCallsCount() < MAX_ENQUEUED_REQUESTS;
+    return client.dispatcher().runningCallsCount() < MAX_RUNNING_REQUESTS; // = MAX_RETRIES + 1
+  }
+
+  private boolean canRetryRequest() {
+    return client.dispatcher().runningCallsCount() < MAX_RETRIES;
   }
 
   private List<String> tagsToList(final Map<String, String> tags) {
@@ -348,5 +353,61 @@ public final class RecordingUploader {
         .filter(e -> e.getValue() != null && !e.getValue().isEmpty())
         .map(e -> e.getKey() + ":" + e.getValue())
         .collect(Collectors.toList());
+  }
+
+  private class RetryCallback implements Callback {
+    private int nbRetries = 0;
+
+    private void tryRetryRequest(Call call) {
+      // Backoff in a dedicated threadpool, outside of OKHttp threadpool
+      retryThreadPool.submit(() -> {
+        // Retry after 1s, 2s, 4s, 8s
+        // TODO: improve backoff timing with some randomness
+        long backoffSec = 1 << nbRetries++;
+        if (backoffSec > MAX_BACKOFF_TIME)
+          backoffSec = MAX_BACKOFF_TIME;
+
+          try {
+            Thread.sleep(backoffSec * 1_000L);
+          } catch (InterruptedException e) {
+            // No special action here, we still have to send the request anyway
+          }
+
+          // Synchronized to avoid current enqueuing of retry requests and guarantee that we never have
+          // more than MAX_RETRIES retry requests.
+          // It ensures that the dispatcher queue is not modified between checking if there is
+          // enough capacity (canRetryRequest()) and adding the request in the queue.
+          synchronized (client.dispatcher()) {
+            if (canRetryRequest() && nbRetries < MAX_RETRIES) {
+              // TODO: add test to check request content is the same when retrying with same 'call'
+              client.newCall(call.request()).enqueue(this);
+              log.error("Retry upload {} time(s)", nbRetries);
+            }
+          }
+      });
+    }
+
+    @Override
+    public void onFailure(final Call call, final IOException e) {
+      log.error("Failed to upload recording", e);
+      tryRetryRequest(call);
+    }
+
+    @Override
+    public void onResponse(final Call call, final Response response) {
+      if (response.isSuccessful()) {
+        log.debug("Upload done");
+      } else if (response.code() == 408 || response.code() == 500) {
+        // HTTP status 408: Request timeout
+        log.error("Failed to upload recording (HTTP status:{})", response.code());
+        tryRetryRequest(call);
+      } else {
+        log.error(
+          "Failed to upload recording: unexpected response code {} {}",
+          response.message(),
+          response.code());
+      }
+      response.close();
+    }
   }
 }

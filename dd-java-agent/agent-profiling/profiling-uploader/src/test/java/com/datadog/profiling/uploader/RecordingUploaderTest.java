@@ -55,6 +55,8 @@ import okhttp3.HttpUrl;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+
+import org.apache.commons.io.IOUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -129,13 +131,27 @@ public class RecordingUploaderTest {
   }
 
   @AfterEach
-  public void tearDown() throws IOException {
+  public void tearDown() {
     uploader.shutdown();
     try {
       server.shutdown();
     } catch (final IOException e) {
       // Looks like this happens for some unclear reason, but should not affect tests
     }
+  }
+
+  @Test
+  public void testRequestRetryOnTimeout() throws IOException, InterruptedException {
+    server.enqueue(new MockResponse().setResponseCode(408)); // HTTP status 408 : Request timeout
+    server.enqueue(new MockResponse().setResponseCode(200));
+
+    uploader.upload(RECORDING_TYPE, mockRecordingData(RECORDING_RESOURCE));
+
+    final RecordedRequest recordedRequest = server.takeRequest(5, TimeUnit.SECONDS);
+    final RecordedRequest retriedRequest = server.takeRequest(5, TimeUnit.SECONDS);
+
+    assertNotNull(recordedRequest);
+    assertNotNull(retriedRequest);
   }
 
   @ParameterizedTest
@@ -332,7 +348,7 @@ public class RecordingUploaderTest {
   @Test
   public void testEnqueuedRequestsExecuted() throws IOException, InterruptedException {
     // We have to block all parallel requests to make sure queue is kept full
-    for (int i = 0; i < RecordingUploader.MAX_RUNNING_REQUESTS; i++) {
+    for (int i = 0; i < uploader.MAX_RUNNING_REQUESTS; i++) {
       server.enqueue(
           new MockResponse()
               .setHeadersDelay(
@@ -342,7 +358,7 @@ public class RecordingUploaderTest {
     }
     server.enqueue(new MockResponse().setResponseCode(200));
 
-    for (int i = 0; i < RecordingUploader.MAX_RUNNING_REQUESTS; i++) {
+    for (int i = 0; i < uploader.MAX_RUNNING_REQUESTS; i++) {
       final RecordingData recording = mockRecordingData(RECORDING_RESOURCE);
       uploader.upload(RECORDING_TYPE, recording);
     }
@@ -351,7 +367,7 @@ public class RecordingUploaderTest {
     uploader.upload(RECORDING_TYPE, additionalRecording);
 
     // Make sure all expected requests happened
-    for (int i = 0; i < RecordingUploader.MAX_RUNNING_REQUESTS; i++) {
+    for (int i = 0; i < uploader.MAX_RUNNING_REQUESTS; i++) {
       assertNotNull(server.takeRequest(5, TimeUnit.SECONDS));
     }
 
@@ -369,7 +385,7 @@ public class RecordingUploaderTest {
     uploader = new RecordingUploader(config);
 
     // We have to block all parallel requests to make sure queue is kept full
-    for (int i = 0; i < RecordingUploader.MAX_RUNNING_REQUESTS; i++) {
+    for (int i = 0; i < uploader.MAX_RUNNING_REQUESTS; i++) {
       server.enqueue(
           new MockResponse()
               .setHeadersDelay(FOREVER_REQUEST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
@@ -377,7 +393,7 @@ public class RecordingUploaderTest {
     }
     server.enqueue(new MockResponse().setResponseCode(200));
 
-    for (int i = 0; i < RecordingUploader.MAX_RUNNING_REQUESTS; i++) {
+    for (int i = 0; i < uploader.MAX_RUNNING_REQUESTS; i++) {
       final RecordingData recording = mockRecordingData(RECORDING_RESOURCE);
       uploader.upload(RECORDING_TYPE, recording);
     }
@@ -385,14 +401,14 @@ public class RecordingUploaderTest {
     final List<RecordingData> hangingRequests = new ArrayList<>();
     // We schedule one additional request to check case when request would be rejected immediately
     // rather than added to the queue.
-    for (int i = 0; i < RecordingUploader.MAX_ENQUEUED_REQUESTS + 1; i++) {
+    for (int i = 0; i < uploader.MAX_ENQUEUED_REQUESTS + 1; i++) {
       final RecordingData recording = mockRecordingData(RECORDING_RESOURCE);
       hangingRequests.add(recording);
       uploader.upload(RECORDING_TYPE, recording);
     }
 
     // Make sure all expected requests happened
-    for (int i = 0; i < RecordingUploader.MAX_RUNNING_REQUESTS; i++) {
+    for (int i = 0; i < uploader.MAX_RUNNING_REQUESTS; i++) {
       assertNotNull(server.takeRequest(5, TimeUnit.SECONDS));
     }
     // Recordings after RecordingUploader.MAX_RUNNING_REQUESTS will not be executed because number
@@ -404,6 +420,37 @@ public class RecordingUploaderTest {
       verify(recording).release();
     }
   }
+
+//  @Test
+//  public void testTooMuchInflightData() throws IOException, InterruptedException {
+//    // Disable compression to compute recording size
+//    when(config.getProfilingUploadCompression()).thenReturn("off");
+//    RecordingData recording = mockRecordingData(RECORDING_RESOURCE);
+//    int recordingSize = IOUtils.toByteArray(recording.getStream()).length;
+//    //when(config.getProfilingMaxRetryUpload()).thenReturn(recordingSize * 2 - 1);// Up to 2 recordings
+//
+//    uploader = new RecordingUploader(config);
+//
+//    MockResponse response =
+//      new MockResponse()
+//        .setHeadersDelay(REQUEST_IO_OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+//        .setResponseCode(200);
+//    server.enqueue(response.clone());
+//    server.enqueue(response.clone());
+//    server.enqueue(response.clone());
+//
+//    uploader.upload(RECORDING_TYPE, mockRecordingData(RECORDING_RESOURCE));
+//    uploader.upload(RECORDING_TYPE, mockRecordingData(RECORDING_RESOURCE));
+//    uploader.upload(RECORDING_TYPE, mockRecordingData(RECORDING_RESOURCE)); // Dropped request
+//
+//    final RecordedRequest firstRequest = server.takeRequest(5, TimeUnit.SECONDS);
+//    final RecordedRequest secondRequest = server.takeRequest(5, TimeUnit.SECONDS);
+//    final RecordedRequest droppedRequest = server.takeRequest(5, TimeUnit.SECONDS); // Timeout since the 3rd request is dropped
+//
+//    assertNotNull(firstRequest);
+//    assertNotNull(secondRequest);
+//    assertNull(droppedRequest);
+//  }
 
   @Test
   public void testShutdown() throws IOException, InterruptedException {
