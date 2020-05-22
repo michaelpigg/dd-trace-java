@@ -25,12 +25,6 @@ public final class ScopeEvent extends Event implements DDScopeEvent {
   @Label("Trace Id")
   private String traceId;
 
-  @Label("Span Id")
-  private String spanId;
-
-  @Label("Parent Id")
-  private String parentId;
-
   @Label("Service Name")
   private String serviceName;
 
@@ -65,8 +59,6 @@ public final class ScopeEvent extends Event implements DDScopeEvent {
         cpuTime = ThreadCpuTimeAccess.getCurrentThreadCpuTime() - cpuTime;
       }
       traceId = spanContext.getTraceId().toString(IDS_RADIX);
-      spanId = spanContext.getSpanId().toString(IDS_RADIX);
-      parentId = spanContext.getParentId().toString(IDS_RADIX);
       serviceName = spanContext.getServiceName();
       resourceName = spanContext.getResourceName();
       operationName = spanContext.getOperationName();
