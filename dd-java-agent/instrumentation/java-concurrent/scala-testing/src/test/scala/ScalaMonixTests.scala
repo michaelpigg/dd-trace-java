@@ -17,10 +17,9 @@ class ScalaMonixTests {
 
   @Trace
   def traceTask: Int = {
-    val f = for {
-      t <- Task.eval(tracedChild("simple-task"))
-    } yield 2
+    val f = Task.eval(tracedChild("simple-task"))
     Await.result(f.runToFuture, 5.seconds)
+    2
   }
 
   @Trace
