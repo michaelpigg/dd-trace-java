@@ -1,5 +1,4 @@
 import datadog.trace.agent.test.AgentTestRunner
-import datadog.trace.agent.test.utils.PortUtils
 import datadog.trace.api.DDSpanTypes
 import datadog.trace.bootstrap.instrumentation.api.Tags
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthRequest
@@ -7,11 +6,12 @@ import org.elasticsearch.action.admin.cluster.stats.ClusterStatsRequest
 import org.elasticsearch.client.transport.TransportClient
 import org.elasticsearch.common.io.FileSystemUtils
 import org.elasticsearch.common.settings.Settings
-import org.elasticsearch.common.transport.InetSocketTransportAddress
+import org.elasticsearch.common.transport.TransportAddress
 import org.elasticsearch.index.IndexNotFoundException
 import org.elasticsearch.node.Node
 import org.elasticsearch.node.NodeBuilder
 import org.elasticsearch.transport.RemoteTransportException
+import org.elasticsearch.transport.TransportService
 import spock.lang.Retry
 import spock.lang.Shared
 
@@ -22,9 +22,7 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
   public static final long TIMEOUT = 10000; // 10 seconds
 
   @Shared
-  int httpPort
-  @Shared
-  int tcpPort
+  TransportAddress tcpPublishAddress
   @Shared
   Node testNode
   @Shared
@@ -34,8 +32,6 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
   TransportClient client
 
   def setupSpec() {
-    httpPort = PortUtils.randomOpenPort()
-    tcpPort = PortUtils.randomOpenPort()
 
     esWorkingDir = File.createTempDir("test-es-working-dir-", "")
     esWorkingDir.deleteOnExit()
@@ -43,11 +39,11 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
 
     def settings = Settings.builder()
       .put("path.home", esWorkingDir.path)
-      .put("http.port", httpPort)
-      .put("transport.tcp.port", tcpPort)
       .build()
     testNode = NodeBuilder.newInstance().clusterName("test-cluster").settings(settings).build()
     testNode.start()
+
+    tcpPublishAddress = testNode.injector().getInstance(TransportService).boundAddress().publishAddress()
 
     client = TransportClient.builder().settings(
       Settings.builder()
@@ -56,7 +52,7 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
         .put("cluster.name", "test-cluster")
         .build()
     ).build()
-    client.addTransportAddress(new InetSocketTransportAddress(InetAddress.getByName("localhost"), tcpPort))
+    client.addTransportAddress(tcpPublishAddress)
     runUnderTrace("setup") {
       // this may potentially create multiple requests and therefore multiple spans, so we wrap this call
       // into a top level trace to get exactly one trace in the result.
@@ -92,9 +88,9 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
           tags {
             "$Tags.COMPONENT" "elasticsearch-java"
             "$Tags.SPAN_KIND" Tags.SPAN_KIND_CLIENT
-            "$Tags.PEER_HOSTNAME" "127.0.0.1"
-            "$Tags.PEER_HOST_IPV4" "127.0.0.1"
-            "$Tags.PEER_PORT" tcpPort
+            "$Tags.PEER_HOSTNAME" tcpPublishAddress.host
+            "$Tags.PEER_HOST_IPV4" tcpPublishAddress.address
+            "$Tags.PEER_PORT" tcpPublishAddress.port
             "$Tags.DB_TYPE" "elasticsearch"
             "elasticsearch.action" "ClusterHealthAction"
             "elasticsearch.request" "ClusterHealthRequest"
@@ -126,9 +122,9 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
           tags {
             "$Tags.COMPONENT" "elasticsearch-java"
             "$Tags.SPAN_KIND" Tags.SPAN_KIND_CLIENT
-            "$Tags.PEER_HOSTNAME" "127.0.0.1"
-            "$Tags.PEER_HOST_IPV4" "127.0.0.1"
-            "$Tags.PEER_PORT" tcpPort
+            "$Tags.PEER_HOSTNAME" tcpPublishAddress.host
+            "$Tags.PEER_HOST_IPV4" tcpPublishAddress.address
+            "$Tags.PEER_PORT" tcpPublishAddress.port
             "$Tags.DB_TYPE" "elasticsearch"
             "elasticsearch.action" "ClusterStatsAction"
             "elasticsearch.request" "ClusterStatsRequest"
@@ -231,9 +227,9 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
           tags {
             "$Tags.COMPONENT" "elasticsearch-java"
             "$Tags.SPAN_KIND" Tags.SPAN_KIND_CLIENT
-            "$Tags.PEER_HOSTNAME" "127.0.0.1"
-            "$Tags.PEER_HOST_IPV4" "127.0.0.1"
-            "$Tags.PEER_PORT" tcpPort
+            "$Tags.PEER_HOSTNAME" tcpPublishAddress.host
+            "$Tags.PEER_HOST_IPV4" tcpPublishAddress.address
+            "$Tags.PEER_PORT" tcpPublishAddress.port
             "$Tags.DB_TYPE" "elasticsearch"
             "elasticsearch.action" "CreateIndexAction"
             "elasticsearch.request" "CreateIndexRequest"
@@ -251,9 +247,9 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
           tags {
             "$Tags.COMPONENT" "elasticsearch-java"
             "$Tags.SPAN_KIND" Tags.SPAN_KIND_CLIENT
-            "$Tags.PEER_HOSTNAME" "127.0.0.1"
-            "$Tags.PEER_HOST_IPV4" "127.0.0.1"
-            "$Tags.PEER_PORT" tcpPort
+            "$Tags.PEER_HOSTNAME" tcpPublishAddress.host
+            "$Tags.PEER_HOST_IPV4" tcpPublishAddress.address
+            "$Tags.PEER_PORT" tcpPublishAddress.port
             "$Tags.DB_TYPE" "elasticsearch"
             "elasticsearch.action" "ClusterHealthAction"
             "elasticsearch.request" "ClusterHealthRequest"
@@ -270,9 +266,9 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
           tags {
             "$Tags.COMPONENT" "elasticsearch-java"
             "$Tags.SPAN_KIND" Tags.SPAN_KIND_CLIENT
-            "$Tags.PEER_HOSTNAME" "127.0.0.1"
-            "$Tags.PEER_HOST_IPV4" "127.0.0.1"
-            "$Tags.PEER_PORT" tcpPort
+            "$Tags.PEER_HOSTNAME" tcpPublishAddress.host
+            "$Tags.PEER_HOST_IPV4" tcpPublishAddress.address
+            "$Tags.PEER_PORT" tcpPublishAddress.port
             "$Tags.DB_TYPE" "elasticsearch"
             "elasticsearch.action" "GetAction"
             "elasticsearch.request" "GetRequest"
@@ -310,9 +306,9 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
           tags {
             "$Tags.COMPONENT" "elasticsearch-java"
             "$Tags.SPAN_KIND" Tags.SPAN_KIND_CLIENT
-            "$Tags.PEER_HOSTNAME" "127.0.0.1"
-            "$Tags.PEER_HOST_IPV4" "127.0.0.1"
-            "$Tags.PEER_PORT" tcpPort
+            "$Tags.PEER_HOSTNAME" tcpPublishAddress.host
+            "$Tags.PEER_HOST_IPV4" tcpPublishAddress.address
+            "$Tags.PEER_PORT" tcpPublishAddress.port
             "$Tags.DB_TYPE" "elasticsearch"
             "elasticsearch.action" "IndexAction"
             "elasticsearch.request" "IndexRequest"
@@ -331,9 +327,9 @@ class Elasticsearch2TransportClientTest extends AgentTestRunner {
           tags {
             "$Tags.COMPONENT" "elasticsearch-java"
             "$Tags.SPAN_KIND" Tags.SPAN_KIND_CLIENT
-            "$Tags.PEER_HOSTNAME" "127.0.0.1"
-            "$Tags.PEER_HOST_IPV4" "127.0.0.1"
-            "$Tags.PEER_PORT" tcpPort
+            "$Tags.PEER_HOSTNAME" tcpPublishAddress.host
+            "$Tags.PEER_HOST_IPV4" tcpPublishAddress.address
+            "$Tags.PEER_PORT" tcpPublishAddress.port
             "$Tags.DB_TYPE" "elasticsearch"
             "elasticsearch.action" "GetAction"
             "elasticsearch.request" "GetRequest"
