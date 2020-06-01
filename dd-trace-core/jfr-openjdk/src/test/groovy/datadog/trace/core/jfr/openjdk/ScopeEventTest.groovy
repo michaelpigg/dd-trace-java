@@ -70,7 +70,7 @@ class ScopeEventTest extends DDSpecification {
     def event = events[0]
     event.eventType.name == "datadog.Scope"
     event.duration >= SLEEP_DURATION
-    event.getString("traceId") == span.context().traceId.toString(IDS_RADIX)
+    event.getString("traceId") == span.context().longValue()
     event.getLong("cpuTime") != Long.MIN_VALUE
 
     cleanup:
@@ -98,7 +98,7 @@ class ScopeEventTest extends DDSpecification {
     def event = events[0]
     event.eventType.name == "datadog.Scope"
     event.duration >= SLEEP_DURATION
-    event.getString("traceId") == span.context().traceId.toString(IDS_RADIX)
+    event.getString("traceId") == span.context().traceId.longValue()
     event.getLong("cpuTime") == Long.MIN_VALUE
 
     cleanup:
@@ -126,7 +126,7 @@ class ScopeEventTest extends DDSpecification {
     def event = events[0]
     event.eventType.name == "datadog.Scope"
     event.duration >= SLEEP_DURATION
-    event.getString("traceId") == span.context().traceId.toString(IDS_RADIX)
+    event.getString("traceId") == span.context().traceId.longValue()
     event.getLong("cpuTime") == Long.MIN_VALUE
 
     cleanup:
@@ -153,6 +153,6 @@ class ScopeEventTest extends DDSpecification {
     def event = events[0]
     event.eventType.name == "datadog.Scope"
     event.duration >= SLEEP_DURATION
-    event.getString("traceId") == span.context().traceId.toString(IDS_RADIX)
+    event.getString("traceId") == span.context().traceId.longValue()
   }
 }
