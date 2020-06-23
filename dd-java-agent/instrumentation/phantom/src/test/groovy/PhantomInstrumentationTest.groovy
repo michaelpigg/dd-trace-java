@@ -63,7 +63,7 @@ class PhantomInstrumentationTest extends AgentTestRunner {
   }
 
   @Shared
-  def insertBook = { id, ec -> testOps.insertBookAndWait((UUID) id, (ExecutionContextExecutor) ec)}
+  def insertBook = { book, ec -> testOps.insertBookAndWait((Book) book, (ExecutionContextExecutor) ec)}
 
   @Shared
   ExecutionContext globalEc = ExecutionContext$.MODULE$.global()
@@ -96,7 +96,7 @@ class PhantomInstrumentationTest extends AgentTestRunner {
   def "test insertBook future"() {
     setup:
     runUnderTrace("parent") {
-      cmd(id, ec)
+      cmd(book, ec)
       blockUntilChildSpansFinished(1)
     }
 
@@ -109,8 +109,8 @@ class PhantomInstrumentationTest extends AgentTestRunner {
     }
 
     where:
-    id                       | cmd             | cql                                                                                                | ec
-    UUID.randomUUID()        | insertBook      | "UPDATE books.books SET title = 'Programming in Scala', author = 'Odersky' WHERE id = " + id + ";" | scala.concurrent.ExecutionContext$.MODULE$.global()
+    book                       | cmd             | cql                                                                                                | ec
+    Book.apply(UUID.randomUUID(), "Design Patterns", "Gamma, et al", "OutOfStock", 0 )       | insertBook      | "UPDATE books.books SET title = '" + book.title() + "', author = '" + book.author() + "' WHERE id = " + book.id() + ";" | scala.concurrent.ExecutionContext$.MODULE$.global()
   }
 
   def phantomSpan(TraceAssert trace, int index, String statement, String keyspace, Object parentSpan = null, Throwable exception = null) {
