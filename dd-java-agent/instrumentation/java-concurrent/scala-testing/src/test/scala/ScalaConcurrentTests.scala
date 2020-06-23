@@ -135,6 +135,15 @@ class ScalaConcurrentTests {
     return 2
   }
 
+  def tracedForExpressions: Int = {
+    val f = for {
+      _ <- Future(tracedChild("step1"))
+      _ <- Future(tracedChild("step2"))
+      _ <- Future(tracedChild("step3"))
+    } yield {3}
+    Await.result(f, 5.seconds)
+  }
+
   @Trace
   def tracedChild(opName: String): Unit = {
     activeSpan().setSpanName(opName)

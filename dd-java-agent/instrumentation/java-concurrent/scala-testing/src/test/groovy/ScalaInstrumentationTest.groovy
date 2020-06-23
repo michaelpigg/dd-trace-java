@@ -63,6 +63,21 @@ class ScalaInstrumentationTest extends AgentTestRunner {
     findSpan(trace, "timeout3").context().getParentId() == trace[0].context().getSpanId()
   }
 
+  def "scala for expression futures"() {
+    setup:
+    ScalaConcurrentTests scalaTest = new ScalaConcurrentTests()
+    int expectedNumberOfSpans = scalaTest.tracedForExpressions()
+    TEST_WRITER.waitForTraces(1)
+    List<DDSpan> trace = TEST_WRITER.get(0)
+
+    expect:
+    TEST_WRITER.size() == 1
+    trace.size() == expectedNumberOfSpans
+    findSpan(trace, "step1")
+    findSpan(trace, "step2")
+    findSpan(trace, "step3")
+  }
+
   private DDSpan findSpan(List<DDSpan> trace, String opName) {
     for (DDSpan span : trace) {
       if (span.getOperationName() == opName) {
